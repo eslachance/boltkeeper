@@ -1,0 +1,19 @@
+{
+    "Group": "com.tokebak",
+    "Name": "Boltkeeper",
+    "Version": "1.0.0",
+    "Main": "com.tokebak.Boltkeeper.Boltkeeper",
+    "IncludesAssetPack": false,
+    "Dependencies": {
+        
+    },
+    "Authors": [
+        
+    ],
+    "OptionalDependencies": {
+        
+    },
+    "LoadBefore": {
+        
+    }
+}
