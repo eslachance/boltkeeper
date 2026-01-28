@@ -13,3 +13,7 @@ Go ahead, install it now! It works on every Crossbow you have, guaranteed or you
 # Use or Download
 
 This mod is available for download on [Modtale](https://modtale.net/mod/boltkeeper-c901ef64-3eda-401a-9f53-e114354d0002) and [CurseForge](https://www.curseforge.com/hytale/mods/boltkeeper)
+
+## Other mods
+
+- [Signature Preservation](https://github.com/eslachance/signature-preservation) - Similar to this one, but saves your Ulimate (Q) charge when swapping weapons!
