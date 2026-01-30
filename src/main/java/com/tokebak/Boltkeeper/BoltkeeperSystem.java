@@ -255,10 +255,13 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         
         int remaining = count;
         
-        // Search through hotbar, then storage for arrows
+        // Search through hotbar, then storage, then backpack for arrows
         remaining = this.consumeArrowsFromContainer(inventory.getHotbar(), remaining);
         if (remaining > 0) {
             remaining = this.consumeArrowsFromContainer(inventory.getStorage(), remaining);
+        }
+        if (remaining > 0) {
+            remaining = this.consumeArrowsFromContainer(inventory.getBackpack(), remaining);
         }
         
         return count - remaining;
