@@ -13,6 +13,7 @@ import com.hypixel.hytale.server.core.inventory.container.ItemContainer;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.CooldownHandler;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.config.SimpleInstantInteraction;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
+import com.hypixel.hytale.protocol.WaitForDataFrom;
 
 import javax.annotation.Nonnull;
 
@@ -31,6 +32,12 @@ public class BoltkeeperAmmoConsumeInteraction extends SimpleInstantInteraction {
             SimpleInstantInteraction.CODEC
     ).build();
     
+    @Nonnull
+    @Override
+    public WaitForDataFrom getWaitForDataFrom() {
+        return WaitForDataFrom.Server;
+    }
+    
     @Override
     protected void firstRun(
             @Nonnull final InteractionType interactionType,
@@ -42,48 +49,38 @@ public class BoltkeeperAmmoConsumeInteraction extends SimpleInstantInteraction {
         
         final Player player = commandBuffer.getComponent(ref, Player.getComponentType());
         if (player == null) {
-            System.out.println("[BOLTKEEPER] Ammo consume: No player component");
             context.getState().state = InteractionState.Failed;
             return;
         }
         
         final Inventory inventory = player.getInventory();
         if (inventory == null) {
-            System.out.println("[BOLTKEEPER] Ammo consume: No inventory");
             context.getState().state = InteractionState.Failed;
             return;
         }
         
         // Try to consume 1 arrow from hotbar first, then storage, then backpack
-        int remaining = 1;
-        
-        remaining = this.consumeArrowsFromContainer(inventory.getHotbar(), remaining, "hotbar");
-        if (remaining > 0) {
-            remaining = this.consumeArrowsFromContainer(inventory.getStorage(), remaining, "storage");
+        boolean consumed = this.consumeArrowFromContainer(inventory.getHotbar());
+        if (!consumed) {
+            consumed = this.consumeArrowFromContainer(inventory.getStorage());
         }
-        if (remaining > 0) {
-            remaining = this.consumeArrowsFromContainer(inventory.getBackpack(), remaining, "backpack");
+        if (!consumed) {
+            consumed = this.consumeArrowFromContainer(inventory.getBackpack());
         }
         
-        if (remaining > 0) {
+        if (!consumed) {
             // Couldn't consume an arrow
-            System.out.println("[BOLTKEEPER] Ammo consume failed: no arrows to consume");
             context.getState().state = InteractionState.Failed;
-        } else {
-            System.out.println("[BOLTKEEPER] Ammo consume succeeded");
         }
+        // If consumed, interaction succeeds (default state)
     }
     
     /**
-     * Consume arrows from a container.
-     * Returns the remaining count needed after consuming from this container.
+     * Try to consume one arrow from a container.
+     * Returns true if an arrow was consumed.
      */
-    private int consumeArrowsFromContainer(
-            @Nonnull final ItemContainer container,
-            int remaining,
-            @Nonnull final String containerName
-    ) {
-        for (short slot = 0; slot < container.getCapacity() && remaining > 0; slot++) {
+    private boolean consumeArrowFromContainer(@Nonnull final ItemContainer container) {
+        for (short slot = 0; slot < container.getCapacity(); slot++) {
             final ItemStack item = container.getItemStack(slot);
             if (item == null || item.isEmpty()) {
                 continue;
@@ -94,15 +91,10 @@ public class BoltkeeperAmmoConsumeInteraction extends SimpleInstantInteraction {
                 continue;
             }
             
-            final int available = item.getQuantity();
-            final int toRemove = Math.min(available, remaining);
-            
-            System.out.println("[BOLTKEEPER] Consuming " + toRemove + " arrow from " + containerName + " slot " + slot);
-            
-            container.removeItemStackFromSlot(slot, toRemove);
-            remaining -= toRemove;
+            // Found an arrow - consume it
+            container.removeItemStackFromSlot(slot, 1);
+            return true;
         }
-        
-        return remaining;
+        return false;
     }
 }

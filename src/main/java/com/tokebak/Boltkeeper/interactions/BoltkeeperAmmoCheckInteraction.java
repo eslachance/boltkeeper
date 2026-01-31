@@ -13,14 +13,15 @@ import com.hypixel.hytale.server.core.inventory.container.ItemContainer;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.CooldownHandler;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.config.SimpleInstantInteraction;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
+import com.hypixel.hytale.protocol.WaitForDataFrom;
 
 import javax.annotation.Nonnull;
 
 /**
- * Custom interaction that checks for arrows in hotbar, storage, AND backpack.
+ * Custom interaction that ONLY CHECKS for arrows in hotbar, storage, AND backpack.
  * This overrides vanilla behavior which only checks hotbar and storage.
  * 
- * Used during crossbow reload to verify arrows are available.
+ * Used for Arrow_Inventory_Condition - does NOT consume, just checks availability.
  */
 public class BoltkeeperAmmoCheckInteraction extends SimpleInstantInteraction {
     
@@ -29,6 +30,12 @@ public class BoltkeeperAmmoCheckInteraction extends SimpleInstantInteraction {
             BoltkeeperAmmoCheckInteraction::new,
             SimpleInstantInteraction.CODEC
     ).build();
+    
+    @Nonnull
+    @Override
+    public WaitForDataFrom getWaitForDataFrom() {
+        return WaitForDataFrom.Server;
+    }
     
     @Override
     protected void firstRun(
@@ -41,39 +48,33 @@ public class BoltkeeperAmmoCheckInteraction extends SimpleInstantInteraction {
         
         final Player player = commandBuffer.getComponent(ref, Player.getComponentType());
         if (player == null) {
-            System.out.println("[BOLTKEEPER] Ammo check: No player component");
             context.getState().state = InteractionState.Failed;
             return;
         }
         
         final Inventory inventory = player.getInventory();
         if (inventory == null) {
-            System.out.println("[BOLTKEEPER] Ammo check: No inventory");
             context.getState().state = InteractionState.Failed;
             return;
         }
         
         // Check if we have any arrows across all containers (hotbar, storage, backpack)
-        int available = 0;
-        available += this.countArrowsInContainer(inventory.getHotbar());
-        available += this.countArrowsInContainer(inventory.getStorage());
-        available += this.countArrowsInContainer(inventory.getBackpack());
+        // Do NOT consume - this is just a check
+        boolean hasArrows = this.hasArrowsInContainer(inventory.getHotbar())
+                || this.hasArrowsInContainer(inventory.getStorage())
+                || this.hasArrowsInContainer(inventory.getBackpack());
         
-        if (available > 0) {
-            // Have arrows, proceed with loading
-            System.out.println("[BOLTKEEPER] Ammo check passed: found " + available + " arrows");
-        } else {
-            // No arrows anywhere
-            System.out.println("[BOLTKEEPER] Ammo check failed: no arrows found");
+        if (!hasArrows) {
+            // No arrows anywhere - fail the interaction
             context.getState().state = InteractionState.Failed;
         }
+        // If arrows found, interaction succeeds (default state)
     }
     
     /**
-     * Count how many arrows exist in a container.
+     * Check if a container has any arrows.
      */
-    private int countArrowsInContainer(@Nonnull final ItemContainer container) {
-        int count = 0;
+    private boolean hasArrowsInContainer(@Nonnull final ItemContainer container) {
         for (short slot = 0; slot < container.getCapacity(); slot++) {
             final ItemStack item = container.getItemStack(slot);
             if (item == null || item.isEmpty()) {
@@ -81,9 +82,9 @@ public class BoltkeeperAmmoCheckInteraction extends SimpleInstantInteraction {
             }
             final String id = item.getItem().getId();
             if (id != null && id.contains("Arrow")) {
-                count += item.getQuantity();
+                return true;
             }
         }
-        return count;
+        return false;
     }
 }

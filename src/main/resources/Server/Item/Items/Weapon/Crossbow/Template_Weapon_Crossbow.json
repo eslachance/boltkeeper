@@ -45,7 +45,7 @@
   "InteractionVars": {
     "Arrow_Inventory_Condition": {
       "Interactions": [
-        "Boltkeeper_Arrow_Inventory_Condition"
+        "Weapon_Crossbow_Arrow_Inventory_Condition"
       ]
     },
     "Standard_Projectile_Damage": {
@@ -144,7 +144,7 @@
       "Interactions": [
         {
           "$Comment": "The item to consume for every iteration of reloading - uses Boltkeeper for backpack support",
-          "Parent": "Boltkeeper_StatAmmoReload_ItemConsume",
+          "Parent": "Common_StatAmmoReload_ItemConsume",
           "ItemToRemove": {
             "Id": "Weapon_Arrow_Crude",
             "Quantity": 1

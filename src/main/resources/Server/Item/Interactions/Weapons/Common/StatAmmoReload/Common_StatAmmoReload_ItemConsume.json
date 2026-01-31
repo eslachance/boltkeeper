@@ -1,18 +1,16 @@
 {
+  "$Comment": "Boltkeeper override - Consumes arrows from hotbar, storage, AND backpack",
   "Type": "BoltkeeperAmmoConsume",
   "ItemToRemove": {
     "Id": "Weapon_Arrow_Crude",
     "Quantity": 1
   },
   "Next": {
-    "Parent": "Weapon_Crossbow_Signature_BigArrow_Shot"
-  },
-  "Failed": {
     "Type": "Replace",
-    "Var": "No_Ammo_Effects",
+    "Var": "Reload_Effects",
     "DefaultValue": {
       "Interactions": [
-        "Common_Bow_No_Ammo"
+        "Common_StatAmmoReload_Effects"
       ]
     }
   }

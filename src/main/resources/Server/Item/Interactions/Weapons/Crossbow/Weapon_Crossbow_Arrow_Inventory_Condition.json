@@ -1,4 +1,5 @@
 {
+  "$Comment": "Boltkeeper override - Checks arrows in hotbar, storage, AND backpack (no consumption)",
   "Type": "BoltkeeperAmmoCheck",
   "ItemToRemove": {
     "Id": "Weapon_Arrow_Crude",
