@@ -81,6 +81,32 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
      */
     private final Map<UUID, ArrowSource> playerArrowSource = new ConcurrentHashMap<>();
     
+    /**
+     * Static map for arrow sources set by interactions.
+     * The interaction classes use this to communicate arrow sources to the tick system.
+     * Key: player UUID, Value: (containerType, slot, itemId)
+     */
+    private static final Map<UUID, String[]> interactionArrowSource = new ConcurrentHashMap<>();
+    
+    /**
+     * Called by BoltkeeperAmmoConsumeInteraction to record where an arrow was consumed from.
+     * This allows the tick system to return arrows to the correct location on swap-out.
+     */
+    public static void recordArrowSource(@Nonnull final UUID playerUuid,
+                                         @Nonnull final String containerType,
+                                         final short slot,
+                                         @Nonnull final String itemId) {
+        interactionArrowSource.put(playerUuid, new String[]{containerType, String.valueOf(slot), itemId});
+        System.out.println("[BOLTKEEPER] Recorded arrow source: " + containerType + " slot " + slot + " (" + itemId + ")");
+    }
+    
+    /**
+     * Clear the interaction arrow source for a player (used when swap-out handles it).
+     */
+    public static void clearInteractionArrowSource(@Nonnull final UUID playerUuid) {
+        interactionArrowSource.remove(playerUuid);
+    }
+    
     public BoltkeeperSystem(@Nonnull final BoltkeeperConfig config) {
         this.config = config;
     }
@@ -194,12 +220,29 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         this.debug(String.format("Old item is crossbow: %b", oldIsCrossbow));
         
         if (oldIsCrossbow && ammoBeforeReset > 0) {
-            // First, return vanilla-dumped arrows to their original source (using map, not item metadata)
-            final ArrowSource arrowSource = this.playerArrowSource.remove(playerUuid);
+            // First, return vanilla-dumped arrows to their original source
+            // Check both playerArrowSource (from tick system) and interactionArrowSource (from reload interaction)
+            ArrowSource arrowSource = this.playerArrowSource.remove(playerUuid);
+            
+            // If not in tick system map, check interaction map
+            if (arrowSource == null) {
+                final String[] interactionSource = interactionArrowSource.remove(playerUuid);
+                if (interactionSource != null && interactionSource.length == 3) {
+                    arrowSource = new ArrowSource(
+                            interactionSource[0],
+                            Short.parseShort(interactionSource[1]),
+                            interactionSource[2],
+                            (int) ammoBeforeReset
+                    );
+                    this.debug(String.format("Using interaction arrow source: %s slot %s",
+                            interactionSource[0], interactionSource[1]));
+                }
+            }
+            
             if (arrowSource != null) {
                 this.returnArrowsToSourceFromMap(inventory, arrowSource, (int) ammoBeforeReset);
             } else {
-                this.debug("No arrow source in map - arrows will remain where vanilla placed them");
+                this.debug("No arrow source in any map - arrows will remain where vanilla placed them");
             }
             
             // Re-fetch the old item after potential inventory changes
@@ -273,12 +316,13 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     }
     
     /**
-     * Return arrows to their original source location after vanilla dumps them to hotbar.
-     * Uses the ArrowSource from the map (not item metadata) to avoid item updates that reset ammo.
+     * Return arrows to their original source container after vanilla dumps them to hotbar.
+     * Uses the ArrowSource from the map to determine which container to return to.
      * 
-     * Note: Only moves arrows if the original source slot is now EMPTY.
-     * If the source slot still has arrows (we took partial), we can't merge stacks,
-     * so we leave the returned arrows where vanilla put them (in hotbar).
+     * Strategy:
+     * 1. Find the arrows in hotbar that vanilla dumped
+     * 2. Try to find an empty slot in the target container (backpack/storage)
+     * 3. Move the arrows there
      */
     private void returnArrowsToSourceFromMap(
             @Nonnull final Inventory inventory,
@@ -286,7 +330,6 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
             final int arrowCount
     ) {
         final String sourceContainer = source.containerType();
-        final short sourceSlot = source.slot();
         final String arrowItemId = source.itemId();
         
         // Don't need to move if source was hotbar
@@ -295,24 +338,18 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
             return;
         }
         
-        this.debug(String.format("Attempting to return arrows (%s) to %s slot %d",
-                arrowItemId, sourceContainer, sourceSlot));
+        this.debug(String.format("Attempting to return arrows (%s) to %s",
+                arrowItemId, sourceContainer));
         
         final ItemContainer hotbar = inventory.getHotbar();
         final ItemContainer targetContainer = "storage".equals(sourceContainer)
                 ? inventory.getStorage()
                 : inventory.getBackpack();
         
-        // Check if the original source slot is empty (we can move arrows back there)
-        final ItemStack existingAtTarget = targetContainer.getItemStack(sourceSlot);
-        if (existingAtTarget != null && !existingAtTarget.isEmpty()) {
-            // Source slot still has items - we can't merge stacks, so leave arrows in hotbar
-            this.debug(String.format("Source slot %s %d still has items - leaving returned arrows in hotbar",
-                    sourceContainer, sourceSlot));
-            return;
-        }
+        // Find the arrows in hotbar that vanilla dumped
+        ItemStack arrowsToMove = null;
+        short hotbarSlot = -1;
         
-        // Source slot is empty - find the arrows in hotbar and move them back
         for (short slot = 0; slot < hotbar.getCapacity(); slot++) {
             final ItemStack item = hotbar.getItemStack(slot);
             if (item == null || item.isEmpty()) {
@@ -320,21 +357,38 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
             }
             
             final String itemId = item.getItem().getId();
-            if (!arrowItemId.equals(itemId)) {
-                continue;
+            if (arrowItemId.equals(itemId)) {
+                arrowsToMove = item;
+                hotbarSlot = slot;
+                break;
             }
-            
-            // Found matching arrows in hotbar - move to target (source is empty)
-            targetContainer.setItemStackForSlot(sourceSlot, item);
-            hotbar.setItemStackForSlot(slot, null);
-            this.debug(String.format("Moved arrows from hotbar slot %d to %s slot %d",
-                    slot, sourceContainer, sourceSlot));
-            
-            // Only move one stack of matching arrows
+        }
+        
+        if (arrowsToMove == null) {
+            this.debug("Could not find matching arrows in hotbar to return");
             return;
         }
         
-        this.debug("Could not find matching arrows in hotbar to return");
+        // Find an empty slot in the target container
+        short targetSlot = -1;
+        for (short slot = 0; slot < targetContainer.getCapacity(); slot++) {
+            final ItemStack item = targetContainer.getItemStack(slot);
+            if (item == null || item.isEmpty()) {
+                targetSlot = slot;
+                break;
+            }
+        }
+        
+        if (targetSlot == -1) {
+            this.debug(String.format("No empty slots in %s - arrows will remain in hotbar", sourceContainer));
+            return;
+        }
+        
+        // Move the arrows from hotbar to the target container
+        targetContainer.setItemStackForSlot(targetSlot, arrowsToMove);
+        hotbar.setItemStackForSlot(hotbarSlot, null);
+        this.debug(String.format("Moved arrows from hotbar slot %d to %s slot %d",
+                hotbarSlot, sourceContainer, targetSlot));
     }
     
     /**
