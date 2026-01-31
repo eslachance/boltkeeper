@@ -1,9 +1,10 @@
 {
     "Group": "com.tokebak",
     "Name": "Boltkeeper",
-    "Version": "1.0.0",
+    "Version": "1.1.0",
+    "Description": "Preserves crossbow ammo when switching slots and enables loading arrows from backpack.",
     "Main": "com.tokebak.Boltkeeper.Boltkeeper",
-    "IncludesAssetPack": false,
+    "IncludesAssetPack": true,
     "Dependencies": {
         
     },
@@ -16,4 +17,4 @@
     "LoadBefore": {
         
     }
-}
+}/

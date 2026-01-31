@@ -276,8 +276,9 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
      * Return arrows to their original source location after vanilla dumps them to hotbar.
      * Uses the ArrowSource from the map (not item metadata) to avoid item updates that reset ammo.
      * 
-     * Note: This moves whole stacks rather than partial quantities due to API limitations.
-     * The arrows vanilla returns should match what we originally consumed.
+     * Note: Only moves arrows if the original source slot is now EMPTY.
+     * If the source slot still has arrows (we took partial), we can't merge stacks,
+     * so we leave the returned arrows where vanilla put them (in hotbar).
      */
     private void returnArrowsToSourceFromMap(
             @Nonnull final Inventory inventory,
@@ -302,7 +303,16 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
                 ? inventory.getStorage()
                 : inventory.getBackpack();
         
-        // Find the arrows in hotbar that vanilla returned and swap them to target
+        // Check if the original source slot is empty (we can move arrows back there)
+        final ItemStack existingAtTarget = targetContainer.getItemStack(sourceSlot);
+        if (existingAtTarget != null && !existingAtTarget.isEmpty()) {
+            // Source slot still has items - we can't merge stacks, so leave arrows in hotbar
+            this.debug(String.format("Source slot %s %d still has items - leaving returned arrows in hotbar",
+                    sourceContainer, sourceSlot));
+            return;
+        }
+        
+        // Source slot is empty - find the arrows in hotbar and move them back
         for (short slot = 0; slot < hotbar.getCapacity(); slot++) {
             final ItemStack item = hotbar.getItemStack(slot);
             if (item == null || item.isEmpty()) {
@@ -314,23 +324,11 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
                 continue;
             }
             
-            // Found matching arrows in hotbar - swap with target slot
-            final ItemStack existingAtTarget = targetContainer.getItemStack(sourceSlot);
-            
-            // Move arrows from hotbar to target
+            // Found matching arrows in hotbar - move to target (source is empty)
             targetContainer.setItemStackForSlot(sourceSlot, item);
-            
-            // If target had something, move it to hotbar (swap)
-            if (existingAtTarget != null && !existingAtTarget.isEmpty()) {
-                hotbar.setItemStackForSlot(slot, existingAtTarget);
-                this.debug(String.format("Swapped arrows from hotbar slot %d with %s slot %d",
-                        slot, sourceContainer, sourceSlot));
-            } else {
-                // Target was empty, just clear hotbar slot
-                hotbar.setItemStackForSlot(slot, null);
-                this.debug(String.format("Moved arrows from hotbar slot %d to %s slot %d",
-                        slot, sourceContainer, sourceSlot));
-            }
+            hotbar.setItemStackForSlot(slot, null);
+            this.debug(String.format("Moved arrows from hotbar slot %d to %s slot %d",
+                    slot, sourceContainer, sourceSlot));
             
             // Only move one stack of matching arrows
             return;

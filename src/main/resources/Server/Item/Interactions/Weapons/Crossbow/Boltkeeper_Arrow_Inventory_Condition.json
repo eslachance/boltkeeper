@@ -1,0 +1,9 @@
+{
+  "Type": "BoltkeeperAmmoCheck",
+  "ItemToRemove": {
+    "Id": "Weapon_Arrow_Crude",
+    "Quantity": 1
+  },
+  "ReserveAmmo": true,
+  "SubtractLoadedAmmo": true
+}
