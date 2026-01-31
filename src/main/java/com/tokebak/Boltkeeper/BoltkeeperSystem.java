@@ -18,8 +18,6 @@ import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,13 +28,13 @@ import java.util.concurrent.TimeUnit;
 /**
  * Boltkeeper System - Preserves crossbow ammo (loaded bolts) between weapon swaps.
  * 
- * By default, Hytale resets the Ammo stat when switching hotbar slots, and returns
- * arrows to the player's inventory. This system:
+ * By default, Hytale resets the Ammo stat when switching hotbar slots.
+ * This system simply:
  * 1. Saves the loaded ammo count to item metadata when swapping away from crossbow
  * 2. Restores that exact amount when swapping back
- * 3. Consumes arrows from inventory to prevent duplication
  * 
- * Extends EntityTickingSystem to properly integrate with the ECS system.
+ * Since arrows are consumed during the actual reload (via BoltkeeperAmmoConsumeInteraction),
+ * we don't need to manipulate inventory at all - just preserve the ammo state.
  */
 public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     
@@ -44,16 +42,6 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
      * Metadata key for storing saved Ammo count on crossbow items.
      */
     public static final String META_KEY_SAVED_AMMO = "BK_SavedAmmo";
-    
-    /**
-     * Represents the source location of consumed arrows.
-     */
-    private record ArrowSource(String containerType, short slot, String itemId, int count) {}
-    
-    /**
-     * Result of consuming arrows, including source tracking.
-     */
-    private record ConsumeResult(int consumed, List<ArrowSource> sources) {}
     
     private final BoltkeeperConfig config;
     
@@ -73,39 +61,6 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
      * Scheduler for delayed ammo restoration.
      */
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    
-    /**
-     * Tracks the arrow source for each player's currently loaded crossbow.
-     * Key: player UUID, Value: arrow source info
-     * This avoids updating the crossbow item after setting ammo (which resets ammo).
-     */
-    private final Map<UUID, ArrowSource> playerArrowSource = new ConcurrentHashMap<>();
-    
-    /**
-     * Static map for arrow sources set by interactions.
-     * The interaction classes use this to communicate arrow sources to the tick system.
-     * Key: player UUID, Value: (containerType, slot, itemId)
-     */
-    private static final Map<UUID, String[]> interactionArrowSource = new ConcurrentHashMap<>();
-    
-    /**
-     * Called by BoltkeeperAmmoConsumeInteraction to record where an arrow was consumed from.
-     * This allows the tick system to return arrows to the correct location on swap-out.
-     */
-    public static void recordArrowSource(@Nonnull final UUID playerUuid,
-                                         @Nonnull final String containerType,
-                                         final short slot,
-                                         @Nonnull final String itemId) {
-        interactionArrowSource.put(playerUuid, new String[]{containerType, String.valueOf(slot), itemId});
-        System.out.println("[BOLTKEEPER] Recorded arrow source: " + containerType + " slot " + slot + " (" + itemId + ")");
-    }
-    
-    /**
-     * Clear the interaction arrow source for a player (used when swap-out handles it).
-     */
-    public static void clearInteractionArrowSource(@Nonnull final UUID playerUuid) {
-        interactionArrowSource.remove(playerUuid);
-    }
     
     public BoltkeeperSystem(@Nonnull final BoltkeeperConfig config) {
         this.config = config;
@@ -153,6 +108,7 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
             return;
         }
         
+        @SuppressWarnings("deprecation")
         final UUID playerUuid = player.getUuid();
         if (playerUuid == null) {
             return;
@@ -193,7 +149,7 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
                 previousSlot, currentSlot, savedAmmo));
         
         // Handle the slot change
-        this.handleSlotChange(entityRef, store, inventory, previousSlot, currentSlot, savedAmmo, playerUuid);
+        this.handleSlotChange(entityRef, store, inventory, previousSlot, currentSlot, savedAmmo);
     }
     
     private void handleSlotChange(
@@ -202,11 +158,10 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
             @Nonnull final Inventory inventory,
             final byte previousSlot,
             final byte currentSlot,
-            final float ammoBeforeReset,
-            @Nonnull final UUID playerUuid
+            final float ammoBeforeReset
     ) {
         final ItemContainer hotbar = inventory.getHotbar();
-        ItemStack oldItem = hotbar.getItemStack((short) previousSlot);
+        final ItemStack oldItem = hotbar.getItemStack((short) previousSlot);
         final ItemStack newItem = hotbar.getItemStack((short) currentSlot);
         
         this.debug(String.format("Hotbar swap: slot %d -> %d | Ammo before reset: %.0f",
@@ -220,41 +175,12 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         this.debug(String.format("Old item is crossbow: %b", oldIsCrossbow));
         
         if (oldIsCrossbow && ammoBeforeReset > 0) {
-            // First, return vanilla-dumped arrows to their original source
-            // Check both playerArrowSource (from tick system) and interactionArrowSource (from reload interaction)
-            ArrowSource arrowSource = this.playerArrowSource.remove(playerUuid);
-            
-            // If not in tick system map, check interaction map
-            if (arrowSource == null) {
-                final String[] interactionSource = interactionArrowSource.remove(playerUuid);
-                if (interactionSource != null && interactionSource.length == 3) {
-                    arrowSource = new ArrowSource(
-                            interactionSource[0],
-                            Short.parseShort(interactionSource[1]),
-                            interactionSource[2],
-                            (int) ammoBeforeReset
-                    );
-                    this.debug(String.format("Using interaction arrow source: %s slot %s",
-                            interactionSource[0], interactionSource[1]));
-                }
-            }
-            
-            if (arrowSource != null) {
-                this.returnArrowsToSourceFromMap(inventory, arrowSource, (int) ammoBeforeReset);
-            } else {
-                this.debug("No arrow source in any map - arrows will remain where vanilla placed them");
-            }
-            
-            // Re-fetch the old item after potential inventory changes
-            oldItem = hotbar.getItemStack((short) previousSlot);
-            
-            // Save ammo count to crossbow metadata
+            // Simply save the ammo count to crossbow metadata
+            // No need to manipulate inventory - arrows were consumed during reload
             final ItemStack updatedOldItem = this.saveAmmo(oldItem, ammoBeforeReset);
             hotbar.setItemStackForSlot((short) previousSlot, updatedOldItem);
             this.debug(String.format("SAVED ammo %.0f to crossbow in slot %d", ammoBeforeReset, previousSlot));
         } else if (oldIsCrossbow) {
-            // Clear any stale arrow source when swapping away with no ammo
-            this.playerArrowSource.remove(playerUuid);
             this.debug("Skipping save - ammo before reset is 0");
         }
         
@@ -284,27 +210,11 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
                     world.execute(() -> {
                         this.debug(String.format("world.execute() running - restoring %.0f ammo", ammoToRestore));
                         
-                        // Consume arrows from inventory with source tracking
-                        final ConsumeResult result = this.consumeArrowsWithTracking(inventory, (int) ammoToRestore);
-                        this.debug(String.format("Consumed %d arrows from inventory", result.consumed()));
-                        
-                        // Only restore the amount of arrows we actually consumed
-                        if (result.consumed() > 0) {
-                            // IMPORTANT: Set ammo LAST, do NOT update item after this
-                            // Store arrow source in map instead of item metadata to avoid resetting ammo
-                            if (!result.sources().isEmpty()) {
-                                final ArrowSource primarySource = result.sources().get(0);
-                                this.playerArrowSource.put(playerUuid, primarySource);
-                                this.debug(String.format("Saved arrow source to map: %s slot %d (%s)",
-                                        primarySource.containerType(), primarySource.slot(), primarySource.itemId()));
-                            }
-                            
-                            this.setAmmo(entityRef, store, result.consumed());
-                            this.debug(String.format("RESTORED %.0f ammo for crossbow in slot %d",
-                                    (float) result.consumed(), currentSlot));
-                        } else {
-                            this.debug("No arrows available to consume - cannot restore ammo");
-                        }
+                        // Simply restore the ammo stat - no inventory manipulation needed
+                        // The arrows were already consumed during the original reload
+                        this.setAmmo(entityRef, store, ammoToRestore);
+                        this.debug(String.format("RESTORED %.0f ammo for crossbow in slot %d",
+                                ammoToRestore, currentSlot));
                     });
                 }, delayMs, TimeUnit.MILLISECONDS);
             } else {
@@ -313,82 +223,6 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         } else {
             this.debug("New item is not a crossbow - no restore needed");
         }
-    }
-    
-    /**
-     * Return arrows to their original source container after vanilla dumps them to hotbar.
-     * Uses the ArrowSource from the map to determine which container to return to.
-     * 
-     * Strategy:
-     * 1. Find the arrows in hotbar that vanilla dumped
-     * 2. Try to find an empty slot in the target container (backpack/storage)
-     * 3. Move the arrows there
-     */
-    private void returnArrowsToSourceFromMap(
-            @Nonnull final Inventory inventory,
-            @Nonnull final ArrowSource source,
-            final int arrowCount
-    ) {
-        final String sourceContainer = source.containerType();
-        final String arrowItemId = source.itemId();
-        
-        // Don't need to move if source was hotbar
-        if ("hotbar".equals(sourceContainer)) {
-            this.debug("Arrow source was hotbar - no need to relocate");
-            return;
-        }
-        
-        this.debug(String.format("Attempting to return arrows (%s) to %s",
-                arrowItemId, sourceContainer));
-        
-        final ItemContainer hotbar = inventory.getHotbar();
-        final ItemContainer targetContainer = "storage".equals(sourceContainer)
-                ? inventory.getStorage()
-                : inventory.getBackpack();
-        
-        // Find the arrows in hotbar that vanilla dumped
-        ItemStack arrowsToMove = null;
-        short hotbarSlot = -1;
-        
-        for (short slot = 0; slot < hotbar.getCapacity(); slot++) {
-            final ItemStack item = hotbar.getItemStack(slot);
-            if (item == null || item.isEmpty()) {
-                continue;
-            }
-            
-            final String itemId = item.getItem().getId();
-            if (arrowItemId.equals(itemId)) {
-                arrowsToMove = item;
-                hotbarSlot = slot;
-                break;
-            }
-        }
-        
-        if (arrowsToMove == null) {
-            this.debug("Could not find matching arrows in hotbar to return");
-            return;
-        }
-        
-        // Find an empty slot in the target container
-        short targetSlot = -1;
-        for (short slot = 0; slot < targetContainer.getCapacity(); slot++) {
-            final ItemStack item = targetContainer.getItemStack(slot);
-            if (item == null || item.isEmpty()) {
-                targetSlot = slot;
-                break;
-            }
-        }
-        
-        if (targetSlot == -1) {
-            this.debug(String.format("No empty slots in %s - arrows will remain in hotbar", sourceContainer));
-            return;
-        }
-        
-        // Move the arrows from hotbar to the target container
-        targetContainer.setItemStackForSlot(targetSlot, arrowsToMove);
-        hotbar.setItemStackForSlot(hotbarSlot, null);
-        this.debug(String.format("Moved arrows from hotbar slot %d to %s slot %d",
-                hotbarSlot, sourceContainer, targetSlot));
     }
     
     /**
@@ -406,89 +240,11 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     }
     
     /**
-     * Consume arrows from the player's inventory with source tracking.
-     * Searches for items containing "Arrow" in their ID.
-     * Returns a ConsumeResult with the count consumed and source locations.
-     */
-    private ConsumeResult consumeArrowsWithTracking(@Nonnull final Inventory inventory, final int count) {
-        if (count <= 0) {
-            return new ConsumeResult(0, new ArrayList<>());
-        }
-        
-        final List<ArrowSource> allSources = new ArrayList<>();
-        int remaining = count;
-        
-        // Search through hotbar, then storage, then backpack for arrows
-        var hotbarResult = this.consumeArrowsFromContainerWithTracking(inventory.getHotbar(), "hotbar", remaining);
-        remaining = hotbarResult.remaining;
-        allSources.addAll(hotbarResult.sources);
-        
-        if (remaining > 0) {
-            var storageResult = this.consumeArrowsFromContainerWithTracking(inventory.getStorage(), "storage", remaining);
-            remaining = storageResult.remaining;
-            allSources.addAll(storageResult.sources);
-        }
-        
-        if (remaining > 0) {
-            var backpackResult = this.consumeArrowsFromContainerWithTracking(inventory.getBackpack(), "backpack", remaining);
-            remaining = backpackResult.remaining;
-            allSources.addAll(backpackResult.sources);
-        }
-        
-        return new ConsumeResult(count - remaining, allSources);
-    }
-    
-    /**
-     * Helper record for container consumption results.
-     */
-    private record ContainerConsumeResult(int remaining, List<ArrowSource> sources) {}
-    
-    /**
-     * Consume arrows from a specific container with source tracking.
-     * Returns the remaining count needed and list of sources consumed from.
-     */
-    private ContainerConsumeResult consumeArrowsFromContainerWithTracking(
-            @Nonnull final ItemContainer container,
-            @Nonnull final String containerType,
-            int remaining
-    ) {
-        final List<ArrowSource> sources = new ArrayList<>();
-        
-        for (short slot = 0; slot < container.getCapacity() && remaining > 0; slot++) {
-            final ItemStack item = container.getItemStack(slot);
-            if (item == null || item.isEmpty()) {
-                continue;
-            }
-            
-            final String itemId = item.getItem().getId();
-            if (itemId == null || !itemId.contains("Arrow")) {
-                continue;
-            }
-            
-            final int available = item.getQuantity();
-            final int toRemove = Math.min(available, remaining);
-            
-            this.debug(String.format("Found %d arrows (%s) in %s slot %d, removing %d",
-                    available, itemId, containerType, slot, toRemove));
-            
-            // Track the source before removing
-            sources.add(new ArrowSource(containerType, slot, itemId, toRemove));
-            
-            // Remove the arrows
-            container.removeItemStackFromSlot(slot, toRemove);
-            remaining -= toRemove;
-        }
-        
-        return new ContainerConsumeResult(remaining, sources);
-    }
-    
-    /**
      * Clean up tracking data when a player disconnects.
      */
     public void cleanupPlayer(@Nonnull final UUID playerUuid) {
         this.lastActiveSlot.remove(playerUuid);
         this.previousTickAmmo.remove(playerUuid);
-        this.playerArrowSource.remove(playerUuid);
     }
     
     // ==================== AMMO STAT HELPERS ====================
