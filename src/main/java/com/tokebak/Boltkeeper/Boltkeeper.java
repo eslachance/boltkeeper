@@ -2,6 +2,7 @@ package com.tokebak.Boltkeeper;
 
 import com.hypixel.hytale.component.system.ISystem;
 import com.hypixel.hytale.server.core.modules.interaction.interaction.config.Interaction;
+import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.util.Config;
@@ -42,14 +43,11 @@ public class Boltkeeper extends JavaPlugin {
 
         // Register the Boltkeeper system for ammo preservation
         final BoltkeeperSystem system = new BoltkeeperSystem(cfg);
-        this.getEntityStoreRegistry().registerSystem((ISystem) system);
+        this.getEntityStoreRegistry().registerSystem((ISystem<EntityStore>) system);
 
         System.out.println("[BOLTKEEPER] ========================================");
         System.out.println("[BOLTKEEPER] Boltkeeper mod loaded!");
-        System.out.println("[BOLTKEEPER] Config: enabled=" + cfg.isEnabled() + ", debug=" + cfg.isDebug() + ", delayMs=" + cfg.getRestoreDelayMs());
-        System.out.println("[BOLTKEEPER] Features:");
-        System.out.println("[BOLTKEEPER]   - Crossbows preserve ammo when swapping slots");
-        System.out.println("[BOLTKEEPER]   - Crossbows can load arrows from backpack");
+        System.out.println("[BOLTKEEPER] Config: enabled=" + cfg.isEnabled() + ", debug=" + cfg.isDebug());
         System.out.println("[BOLTKEEPER] ========================================");
     }
     

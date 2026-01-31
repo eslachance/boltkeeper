@@ -8,6 +8,7 @@ import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.component.query.Query;
 import com.hypixel.hytale.component.system.tick.EntityTickingSystem;
 import com.hypixel.hytale.server.core.entity.entities.Player;
+import com.hypixel.hytale.server.core.entity.UUIDComponent;
 import com.hypixel.hytale.server.core.inventory.Inventory;
 import com.hypixel.hytale.server.core.inventory.ItemStack;
 import com.hypixel.hytale.server.core.inventory.container.ItemContainer;
@@ -108,8 +109,11 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
             return;
         }
         
-        @SuppressWarnings("deprecation")
-        final UUID playerUuid = player.getUuid();
+        final UUIDComponent uuidComponent = (UUIDComponent) archetypeChunk.getComponent(index, UUIDComponent.getComponentType());
+        if (uuidComponent == null) {
+            return;
+        }
+        final UUID playerUuid = uuidComponent.getUuid();
         if (playerUuid == null) {
             return;
         }
@@ -249,7 +253,6 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     
     // ==================== AMMO STAT HELPERS ====================
     
-    @SuppressWarnings("unchecked")
     private float getAmmo(
             @Nonnull final Ref<EntityStore> entityRef,
             @Nonnull final Store<EntityStore> store
@@ -260,7 +263,7 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         }
         
         final EntityStatMap statMap = (EntityStatMap) store.getComponent(
-                (Ref) entityRef,
+                entityRef,
                 EntityStatMap.getComponentType()
         );
         
@@ -272,7 +275,6 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         return statValue != null ? statValue.get() : 0f;
     }
     
-    @SuppressWarnings("unchecked")
     private void setAmmo(
             @Nonnull final Ref<EntityStore> entityRef,
             @Nonnull final Store<EntityStore> store,
@@ -290,7 +292,7 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         }
         
         final EntityStatMap statMap = (EntityStatMap) store.getComponent(
-                (Ref) entityRef,
+                entityRef,
                 EntityStatMap.getComponentType()
         );
         
