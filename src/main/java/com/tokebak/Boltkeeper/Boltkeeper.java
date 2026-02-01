@@ -8,17 +8,21 @@ import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.util.Config;
 import com.tokebak.Boltkeeper.interactions.BoltkeeperAmmoCheckInteraction;
 import com.tokebak.Boltkeeper.interactions.BoltkeeperAmmoConsumeInteraction;
+import com.tokebak.Boltkeeper.interactions.BoltkeeperEssenceCheckInteraction;
+import com.tokebak.Boltkeeper.interactions.BoltkeeperEssenceConsumeInteraction;
 
 import javax.annotation.Nonnull;
 
 /**
- * Boltkeeper - A Hytale mod that enhances crossbow behavior:
- * 1. Automatically preserves loaded ammo when switching hotbar slots
- * 2. Allows crossbows to load arrows from the backpack (not just hotbar/storage)
+ * Boltkeeper - A Hytale mod that enhances weapon behavior for projectile/magic weapons:
+ * 
+ * Supported weapons:
+ * - Crossbows: Preserves loaded ammo (Ammo stat), allows arrow loading from backpack
+ * - Fire Staff: Preserves magic charges (MagicCharges stat), allows Fire Essence from backpack
  * 
  * This is achieved through:
- * - Custom interactions that check/consume arrows from all inventory containers
- * - A tick-based system that tracks ammo state across slot changes
+ * - Custom interactions that check/consume ammo from all inventory containers (including backpack)
+ * - A tick-based system that tracks weapon stats across hotbar slot changes
  */
 public class Boltkeeper extends JavaPlugin {
 
@@ -52,10 +56,12 @@ public class Boltkeeper extends JavaPlugin {
     }
     
     /**
-     * Register custom interaction types for crossbow arrow handling.
-     * These interactions check/consume arrows from backpack in addition to hotbar/storage.
+     * Register custom interaction types for weapon ammo/essence handling.
+     * These interactions check/consume resources from backpack in addition to hotbar/storage.
      */
     private void registerInteractions() {
+        // ==================== CROSSBOW INTERACTIONS ====================
+        
         // Register BoltkeeperAmmoCheck - checks for arrows including backpack
         this.getCodecRegistry(Interaction.CODEC).register(
                 "BoltkeeperAmmoCheck",
@@ -70,6 +76,22 @@ public class Boltkeeper extends JavaPlugin {
                 BoltkeeperAmmoConsumeInteraction.CODEC
         );
         
-        System.out.println("[BOLTKEEPER] Registered custom interactions: BoltkeeperAmmoCheck, BoltkeeperAmmoConsume");
+        // ==================== FIRE STAFF INTERACTIONS ====================
+        
+        // Register BoltkeeperEssenceCheck - checks for Fire Essence including backpack
+        this.getCodecRegistry(Interaction.CODEC).register(
+                "BoltkeeperEssenceCheck",
+                BoltkeeperEssenceCheckInteraction.class,
+                BoltkeeperEssenceCheckInteraction.CODEC
+        );
+        
+        // Register BoltkeeperEssenceConsume - consumes Fire Essence from anywhere including backpack
+        this.getCodecRegistry(Interaction.CODEC).register(
+                "BoltkeeperEssenceConsume",
+                BoltkeeperEssenceConsumeInteraction.class,
+                BoltkeeperEssenceConsumeInteraction.CODEC
+        );
+        
+        System.out.println("[BOLTKEEPER] Registered custom interactions: BoltkeeperAmmoCheck, BoltkeeperAmmoConsume, BoltkeeperEssenceCheck, BoltkeeperEssenceConsume");
     }
 }

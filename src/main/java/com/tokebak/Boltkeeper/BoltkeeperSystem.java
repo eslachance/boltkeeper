@@ -27,15 +27,16 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Boltkeeper System - Preserves crossbow ammo (loaded bolts) between weapon swaps.
+ * Boltkeeper System - Preserves weapon charge stats between weapon swaps.
  * 
- * By default, Hytale resets the Ammo stat when switching hotbar slots.
- * This system simply:
- * 1. Saves the loaded ammo count to item metadata when swapping away from crossbow
+ * By default, Hytale resets certain stats (Ammo, MagicCharges) when switching hotbar slots.
+ * This system:
+ * 1. Saves the stat value to item metadata when swapping away from a supported weapon
  * 2. Restores that exact amount when swapping back
  * 
- * Since arrows are consumed during the actual reload (via BoltkeeperAmmoConsumeInteraction),
- * we don't need to manipulate inventory at all - just preserve the ammo state.
+ * Supported weapons:
+ * - Crossbows: Preserves the "Ammo" stat (loaded bolts)
+ * - Fire Staff: Preserves the "MagicCharges" stat (charged fire orbs)
  */
 public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     
@@ -43,6 +44,11 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
      * Metadata key for storing saved Ammo count on crossbow items.
      */
     public static final String META_KEY_SAVED_AMMO = "BK_SavedAmmo";
+    
+    /**
+     * Metadata key for storing saved MagicCharges count on fire staff items.
+     */
+    public static final String META_KEY_SAVED_MAGIC_CHARGES = "BK_SavedMagicCharges";
     
     private final BoltkeeperConfig config;
     
@@ -59,7 +65,12 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     private final Map<UUID, Float> previousTickAmmo = new ConcurrentHashMap<>();
     
     /**
-     * Scheduler for delayed ammo restoration.
+     * Tracks the MagicCharges value from the PREVIOUS tick per player UUID.
+     */
+    private final Map<UUID, Float> previousTickMagicCharges = new ConcurrentHashMap<>();
+    
+    /**
+     * Scheduler for delayed stat restoration.
      */
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     
@@ -120,15 +131,18 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         
         final byte currentSlot = inventory.getActiveHotbarSlot();
         
-        // Read current Ammo (we track this every tick)
-        final float currentAmmo = this.getAmmo(entityRef, store);
+        // Read current stats (we track these every tick)
+        final float currentAmmo = this.getStatValue(entityRef, store, "Ammo");
+        final float currentMagicCharges = this.getStatValue(entityRef, store, "MagicCharges");
         
         // Get last known slot (or initialize if first time)
         final Byte lastSlotObj = this.lastActiveSlot.get(playerUuid);
         if (lastSlotObj == null) {
             this.lastActiveSlot.put(playerUuid, currentSlot);
             this.previousTickAmmo.put(playerUuid, currentAmmo);
-            this.debug(String.format("Player first tick - initial slot: %d, ammo: %.0f", currentSlot, currentAmmo));
+            this.previousTickMagicCharges.put(playerUuid, currentMagicCharges);
+            this.debug(String.format("Player first tick - initial slot: %d, ammo: %.0f, magicCharges: %.0f", 
+                    currentSlot, currentAmmo, currentMagicCharges));
             return;
         }
         
@@ -136,24 +150,29 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         
         // Check if slot changed
         if (currentSlot == previousSlot) {
-            // No slot change - just update the tracked ammo for next tick
+            // No slot change - just update the tracked stats for next tick
             this.previousTickAmmo.put(playerUuid, currentAmmo);
+            this.previousTickMagicCharges.put(playerUuid, currentMagicCharges);
             return;
         }
         
-        // Slot changed! Get the ammo from BEFORE the reset (previous tick's value)
+        // Slot changed! Get the stats from BEFORE the reset (previous tick's values)
         final Float ammoBeforeReset = this.previousTickAmmo.get(playerUuid);
         final float savedAmmo = ammoBeforeReset != null ? ammoBeforeReset : 0f;
+        
+        final Float magicChargesBeforeReset = this.previousTickMagicCharges.get(playerUuid);
+        final float savedMagicCharges = magicChargesBeforeReset != null ? magicChargesBeforeReset : 0f;
         
         // Update tracking for next tick
         this.lastActiveSlot.put(playerUuid, currentSlot);
         this.previousTickAmmo.put(playerUuid, currentAmmo);
+        this.previousTickMagicCharges.put(playerUuid, currentMagicCharges);
         
-        this.debug(String.format("Hotbar slot change: %d -> %d (ammo before reset: %.0f)",
-                previousSlot, currentSlot, savedAmmo));
+        this.debug(String.format("Hotbar slot change: %d -> %d (ammo: %.0f, magicCharges: %.0f)",
+                previousSlot, currentSlot, savedAmmo, savedMagicCharges));
         
         // Handle the slot change
-        this.handleSlotChange(entityRef, store, inventory, previousSlot, currentSlot, savedAmmo);
+        this.handleSlotChange(entityRef, store, inventory, previousSlot, currentSlot, savedAmmo, savedMagicCharges);
     }
     
     private void handleSlotChange(
@@ -162,72 +181,84 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
             @Nonnull final Inventory inventory,
             final byte previousSlot,
             final byte currentSlot,
-            final float ammoBeforeReset
+            final float ammoBeforeReset,
+            final float magicChargesBeforeReset
     ) {
         final ItemContainer hotbar = inventory.getHotbar();
-        final ItemStack oldItem = hotbar.getItemStack((short) previousSlot);
-        final ItemStack newItem = hotbar.getItemStack((short) currentSlot);
+        ItemStack oldItem = hotbar.getItemStack((short) previousSlot);
+        ItemStack newItem = hotbar.getItemStack((short) currentSlot);
         
-        this.debug(String.format("Hotbar swap: slot %d -> %d | Ammo before reset: %.0f",
-                previousSlot, currentSlot, ammoBeforeReset));
+        this.debug(String.format("Hotbar swap: slot %d -> %d | Ammo: %.0f, MagicCharges: %.0f",
+                previousSlot, currentSlot, ammoBeforeReset, magicChargesBeforeReset));
         this.debug(String.format("Old item: %s | New item: %s",
                 oldItem != null ? oldItem.getItem().getId() : "null",
                 newItem != null ? newItem.getItem().getId() : "null"));
         
+        // ==================== HANDLE OLD ITEM (SAVE STATS) ====================
+        
         // Save ammo to the OLD item (if it's a crossbow with loaded ammo)
         final boolean oldIsCrossbow = this.isCrossbow(oldItem);
-        this.debug(String.format("Old item is crossbow: %b", oldIsCrossbow));
-        
         if (oldIsCrossbow && ammoBeforeReset > 0) {
-            // Simply save the ammo count to crossbow metadata
-            // No need to manipulate inventory - arrows were consumed during reload
-            final ItemStack updatedOldItem = this.saveAmmo(oldItem, ammoBeforeReset);
-            hotbar.setItemStackForSlot((short) previousSlot, updatedOldItem);
+            oldItem = this.saveAmmo(oldItem, ammoBeforeReset);
+            hotbar.setItemStackForSlot((short) previousSlot, oldItem);
             this.debug(String.format("SAVED ammo %.0f to crossbow in slot %d", ammoBeforeReset, previousSlot));
-        } else if (oldIsCrossbow) {
-            this.debug("Skipping save - ammo before reset is 0");
         }
         
-        // Check if the NEW item is a crossbow with saved ammo to restore
-        final boolean newIsCrossbow = this.isCrossbow(newItem);
-        this.debug(String.format("New item is crossbow: %b", newIsCrossbow));
+        // Save magic charges to the OLD item (if it's a fire staff with charges)
+        final boolean oldIsFireStaff = this.isFireStaff(oldItem);
+        if (oldIsFireStaff && magicChargesBeforeReset > 0) {
+            oldItem = this.saveMagicCharges(oldItem, magicChargesBeforeReset);
+            hotbar.setItemStackForSlot((short) previousSlot, oldItem);
+            this.debug(String.format("SAVED magicCharges %.0f to fire staff in slot %d", magicChargesBeforeReset, previousSlot));
+        }
         
+        // ==================== HANDLE NEW ITEM (RESTORE STATS) ====================
+        
+        final World world = ((EntityStore) store.getExternalData()).getWorld();
+        final long delayMs = this.config.getRestoreDelayMs();
+        
+        // Restore ammo for crossbow
+        final boolean newIsCrossbow = this.isCrossbow(newItem);
         if (newIsCrossbow) {
             final Float savedAmmo = this.getSavedAmmo(newItem);
-            this.debug(String.format("Saved ammo in crossbow metadata: %s", savedAmmo));
-            
             if (savedAmmo != null && savedAmmo > 0) {
-                // Clear the saved ammo from the item's metadata BEFORE scheduling restore
-                final ItemStack updatedNewItem = this.clearSavedAmmo(newItem);
-                hotbar.setItemStackForSlot((short) currentSlot, updatedNewItem);
-                this.debug("Cleared saved ammo from crossbow metadata");
+                newItem = this.clearSavedAmmo(newItem);
+                hotbar.setItemStackForSlot((short) currentSlot, newItem);
                 
-                // Schedule the restore with a delay
-                final World world = ((EntityStore) store.getExternalData()).getWorld();
                 final float ammoToRestore = savedAmmo;
-                final long delayMs = this.config.getRestoreDelayMs();
-                
                 this.debug(String.format("Scheduling restore of %.0f ammo in %dms", ammoToRestore, delayMs));
                 
                 this.scheduler.schedule(() -> {
-                    this.debug(String.format("Scheduler fired - restoring %.0f ammo", ammoToRestore));
                     world.execute(() -> {
-                        this.debug(String.format("world.execute() running - restoring %.0f ammo", ammoToRestore));
-                        
-                        // Simply restore the ammo stat - no inventory manipulation needed
-                        // The arrows were already consumed during the original reload
-                        this.setAmmo(entityRef, store, ammoToRestore);
-                        this.debug(String.format("RESTORED %.0f ammo for crossbow in slot %d",
-                                ammoToRestore, currentSlot));
+                        this.setStatValue(entityRef, store, "Ammo", ammoToRestore);
+                        this.debug(String.format("RESTORED %.0f ammo for crossbow in slot %d", ammoToRestore, currentSlot));
                     });
                 }, delayMs, TimeUnit.MILLISECONDS);
-            } else {
-                this.debug("No saved ammo to restore (null or 0)");
             }
-        } else {
-            this.debug("New item is not a crossbow - no restore needed");
+        }
+        
+        // Restore magic charges for fire staff
+        final boolean newIsFireStaff = this.isFireStaff(newItem);
+        if (newIsFireStaff) {
+            final Float savedMagicCharges = this.getSavedMagicCharges(newItem);
+            if (savedMagicCharges != null && savedMagicCharges > 0) {
+                newItem = this.clearSavedMagicCharges(newItem);
+                hotbar.setItemStackForSlot((short) currentSlot, newItem);
+                
+                final float chargesToRestore = savedMagicCharges;
+                this.debug(String.format("Scheduling restore of %.0f magicCharges in %dms", chargesToRestore, delayMs));
+                
+                this.scheduler.schedule(() -> {
+                    world.execute(() -> {
+                        this.setStatValue(entityRef, store, "MagicCharges", chargesToRestore);
+                        this.debug(String.format("RESTORED %.0f magicCharges for fire staff in slot %d", chargesToRestore, currentSlot));
+                    });
+                }, delayMs, TimeUnit.MILLISECONDS);
+            }
         }
     }
+    
+    // ==================== WEAPON TYPE CHECKS ====================
     
     /**
      * Check if an item is a crossbow weapon.
@@ -244,21 +275,37 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     }
     
     /**
+     * Check if an item is a Fire Staff weapon.
+     */
+    private boolean isFireStaff(@Nullable final ItemStack item) {
+        if (item == null || item.isEmpty()) {
+            return false;
+        }
+        if (item.getItem().getWeapon() == null) {
+            return false;
+        }
+        final String itemId = item.getItem().getId();
+        return itemId != null && itemId.equals("Weapon_Staff_Crystal_Flame");
+    }
+    
+    /**
      * Clean up tracking data when a player disconnects.
      */
     public void cleanupPlayer(@Nonnull final UUID playerUuid) {
         this.lastActiveSlot.remove(playerUuid);
         this.previousTickAmmo.remove(playerUuid);
+        this.previousTickMagicCharges.remove(playerUuid);
     }
     
-    // ==================== AMMO STAT HELPERS ====================
+    // ==================== GENERIC STAT HELPERS ====================
     
-    private float getAmmo(
+    private float getStatValue(
             @Nonnull final Ref<EntityStore> entityRef,
-            @Nonnull final Store<EntityStore> store
+            @Nonnull final Store<EntityStore> store,
+            @Nonnull final String statName
     ) {
-        final int ammoIndex = EntityStatType.getAssetMap().getIndex("Ammo");
-        if (ammoIndex == Integer.MIN_VALUE) {
+        final int statIndex = EntityStatType.getAssetMap().getIndex(statName);
+        if (statIndex == Integer.MIN_VALUE) {
             return 0f;
         }
         
@@ -271,23 +318,24 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
             return 0f;
         }
         
-        final var statValue = statMap.get(ammoIndex);
+        final var statValue = statMap.get(statIndex);
         return statValue != null ? statValue.get() : 0f;
     }
     
-    private void setAmmo(
+    private void setStatValue(
             @Nonnull final Ref<EntityStore> entityRef,
             @Nonnull final Store<EntityStore> store,
+            @Nonnull final String statName,
             final float value
     ) {
-        final int ammoIndex = EntityStatType.getAssetMap().getIndex("Ammo");
-        if (ammoIndex == Integer.MIN_VALUE) {
-            this.debug("setAmmo FAILED: Ammo stat not found!");
+        final int statIndex = EntityStatType.getAssetMap().getIndex(statName);
+        if (statIndex == Integer.MIN_VALUE) {
+            this.debug(String.format("setStatValue FAILED: %s stat not found!", statName));
             return;
         }
         
         if (!entityRef.isValid()) {
-            this.debug("setAmmo FAILED: entityRef is no longer valid!");
+            this.debug(String.format("setStatValue FAILED: entityRef is no longer valid for %s!", statName));
             return;
         }
         
@@ -297,20 +345,20 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         );
         
         if (statMap == null) {
-            this.debug("setAmmo FAILED: statMap is null!");
+            this.debug(String.format("setStatValue FAILED: statMap is null for %s!", statName));
             return;
         }
         
-        statMap.setStatValue(ammoIndex, value);
+        statMap.setStatValue(statIndex, value);
         
         if (this.config.isDebug()) {
-            final var verify = statMap.get(ammoIndex);
+            final var verify = statMap.get(statIndex);
             final float verifyValue = verify != null ? verify.get() : -1f;
-            this.debug(String.format("setAmmo: set %.0f, verify read back: %.0f", value, verifyValue));
+            this.debug(String.format("setStatValue(%s): set %.0f, verify read back: %.0f", statName, value, verifyValue));
         }
     }
     
-    // ==================== ITEM METADATA HELPERS ====================
+    // ==================== AMMO METADATA HELPERS (Crossbow) ====================
     
     @Nonnull
     private ItemStack saveAmmo(@Nonnull final ItemStack item, final float ammo) {
@@ -325,5 +373,22 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     @Nonnull
     private ItemStack clearSavedAmmo(@Nonnull final ItemStack item) {
         return item.withMetadata(META_KEY_SAVED_AMMO, Codec.FLOAT, 0f);
+    }
+    
+    // ==================== MAGIC CHARGES METADATA HELPERS (Fire Staff) ====================
+    
+    @Nonnull
+    private ItemStack saveMagicCharges(@Nonnull final ItemStack item, final float charges) {
+        return item.withMetadata(META_KEY_SAVED_MAGIC_CHARGES, Codec.FLOAT, charges);
+    }
+    
+    @Nullable
+    private Float getSavedMagicCharges(@Nonnull final ItemStack item) {
+        return (Float) item.getFromMetadataOrNull(META_KEY_SAVED_MAGIC_CHARGES, Codec.FLOAT);
+    }
+    
+    @Nonnull
+    private ItemStack clearSavedMagicCharges(@Nonnull final ItemStack item) {
+        return item.withMetadata(META_KEY_SAVED_MAGIC_CHARGES, Codec.FLOAT, 0f);
     }
 }
