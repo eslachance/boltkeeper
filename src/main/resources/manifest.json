@@ -1,7 +1,7 @@
 {
     "Group": "com.tokebak",
     "Name": "Boltkeeper",
-    "Version": "1.2.0",
+    "Version": "1.3.0",
     "Description": "Preserves weapon charges (crossbow ammo, fire staff magic charges) when switching slots. Enables loading ammo/essence from backpack.",
     "Main": "com.tokebak.Boltkeeper.Boltkeeper",
     "ServerVersion": "2026.02.17-255364b8e",
