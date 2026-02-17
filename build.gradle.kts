@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "tokebak"
-version = "1.3.0"
+version = "1.3.1"
 
 repositories {
     mavenCentral()
@@ -19,10 +19,8 @@ dependencies {
 }
 
 hytale {
-    serverJar.set(file("libs/HytaleServer.jar"))
-    assetsZip.set(file("libs/Assets.zip"))
     allowOp.set(true)
-    patchline.set("pre-release")
+    patchline.set("release")
     includeLocalMods.set(true)
 
     manifest {
