@@ -1,4 +1,0 @@
-{
-  "$Comment": "Boltkeeper override - Prevents vanilla from dumping arrows when swapping away from crossbow",
-  "Type": "ChangeActiveSlot"
-}
