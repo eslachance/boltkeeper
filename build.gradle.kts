@@ -20,7 +20,7 @@ dependencies {
 
 hytale {
     allowOp.set(true)
-    patchline.set("release")
+    patchline.set("pre-release")
     includeLocalMods.set(true)
 
     manifest {

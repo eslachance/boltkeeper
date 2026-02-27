@@ -217,7 +217,7 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
         final World world = ((EntityStore) store.getExternalData()).getWorld();
         final long delayMs = this.config.getRestoreDelayMs();
         
-        // Restore ammo for crossbow
+        // Restore ammo for crossbow (and consume arrows from inventory to avoid duplication with vanilla's swap-away dump)
         final boolean newIsCrossbow = this.isCrossbow(newItem);
         if (newIsCrossbow) {
             final Float savedAmmo = this.getSavedAmmo(newItem);
@@ -226,12 +226,26 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
                 hotbar.setItemStackForSlot((short) currentSlot, newItem);
                 
                 final float ammoToRestore = savedAmmo;
-                this.debug(String.format("Scheduling restore of %.0f ammo in %dms", ammoToRestore, delayMs));
+                this.debug(String.format("Scheduling restore of %.0f ammo in %dms (will consume arrows from inventory)", ammoToRestore, delayMs));
                 
                 this.scheduler.schedule(() -> {
                     world.execute(() -> {
-                        this.setStatValue(entityRef, store, "Ammo", ammoToRestore);
-                        this.debug(String.format("RESTORED %.0f ammo for crossbow in slot %d", ammoToRestore, currentSlot));
+                        final Player player = (Player) store.getComponent(entityRef, Player.getComponentType());
+                        if (player == null || !entityRef.isValid()) {
+                            return;
+                        }
+                        final Inventory inv = player.getInventory();
+                        if (inv == null) {
+                            return;
+                        }
+                        final int toConsume = (int) ammoToRestore;
+                        final int consumed = this.consumeArrowsFromInventory(inv, toConsume);
+                        if (consumed > 0) {
+                            this.setStatValue(entityRef, store, "Ammo", consumed);
+                            this.debug(String.format("RESTORED %d ammo for crossbow in slot %d (consumed %d arrows from inventory)", consumed, currentSlot, consumed));
+                        } else {
+                            this.debug(String.format("Restore skipped: no arrows in inventory to consume for slot %d", currentSlot));
+                        }
                     });
                 }, delayMs, TimeUnit.MILLISECONDS);
             }
@@ -373,6 +387,45 @@ public class BoltkeeperSystem extends EntityTickingSystem<EntityStore> {
     @Nonnull
     private ItemStack clearSavedAmmo(@Nonnull final ItemStack item) {
         return item.withMetadata(META_KEY_SAVED_AMMO, Codec.FLOAT, 0f);
+    }
+    
+    /**
+     * Consume up to {@code count} arrow items from the player's inventory (hotbar, then storage, then backpack).
+     * Used when restoring crossbow ammo so we don't duplicate arrows that vanilla put in inventory on swap-away.
+     *
+     * @return the number of arrows actually consumed
+     */
+    private int consumeArrowsFromInventory(@Nonnull final Inventory inventory, final int count) {
+        int remaining = count;
+        final ItemContainer[] containers = {
+                inventory.getHotbar(),
+                inventory.getStorage(),
+                inventory.getBackpack()
+        };
+        for (final ItemContainer container : containers) {
+            if (container == null || remaining <= 0) {
+                continue;
+            }
+            final short capacity = container.getCapacity();
+            for (short slot = 0; slot < capacity && remaining > 0; slot++) {
+                final ItemStack stack = container.getItemStack(slot);
+                if (stack == null || stack.isEmpty() || !this.isArrow(stack)) {
+                    continue;
+                }
+                final int take = Math.min(remaining, stack.getQuantity());
+                container.removeItemStackFromSlot(slot, take);
+                remaining -= take;
+            }
+        }
+        return count - remaining;
+    }
+    
+    private boolean isArrow(@Nullable final ItemStack item) {
+        if (item == null || item.isEmpty()) {
+            return false;
+        }
+        final String id = item.getItem().getId();
+        return id != null && id.contains("Arrow");
     }
     
     // ==================== MAGIC CHARGES METADATA HELPERS (Fire Staff) ====================
